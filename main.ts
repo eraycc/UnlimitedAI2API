@@ -390,6 +390,6 @@ async function handler(request: Request): Promise<Response> {
 }
 
 // 启动服务器
-console.log("Server running);
-//serve(handler, { port: 8000 });
+console.log("Server running");
+
 Deno.serve(handler);
