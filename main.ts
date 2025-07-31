@@ -49,9 +49,16 @@ function parseStreamLine(line: string): { type: string; data: any } | null {
   if (colonIndex === -1) return null;
   
   const type = line.substring(0, colonIndex);
-  const content = line.substring(colonIndex + 1);
+  let content = line.substring(colonIndex + 1);
   
   try {
+    // 处理内容中的多余引号
+    if (type === '0' && content.startsWith('"') && content.endsWith('"')) {
+      content = content.substring(1, content.length - 1);
+      // 替换转义的换行符
+      content = content.replace(/\\n/g, '\n');
+    }
+    
     const data = content.startsWith('{') ? JSON.parse(content) : content;
     return { type, data };
   } catch (e) {
@@ -138,7 +145,7 @@ async function handleChatRequest(request: Request): Promise<Response> {
     selectedChatModel: "chat-model-reasoning",
   };
 
-  // 添加可选参数，实测不支持
+  // 添加可选参数
   if (temperature !== undefined) payload.temperature = temperature;
   if (max_tokens !== undefined) payload.max_tokens = max_tokens;
 
@@ -187,9 +194,7 @@ async function handleChatRequest(request: Request): Promise<Response> {
         if (parsed.type === 'f') {
           messageId = parsed.data.messageId || "";
         } else if (parsed.type === '0') {
-          let content = parsed.data;
-          content = content.replace(/\\n/g, '\n');
-          contentChunks.push(content);
+          contentChunks.push(parsed.data);
         } else if (parsed.type === 'e' || parsed.type === 'd') {
           if (parsed.data.finishReason) finishReason = parsed.data.finishReason;
           if (parsed.data.usage) {
@@ -294,9 +299,6 @@ async function handleChatRequest(request: Request): Promise<Response> {
                   if (parsed.type === 'f') {
                     messageId = parsed.data.messageId || "";
                   } else if (parsed.type === '0') {
-                    let content = parsed.data;
-                    content = content.replace(/\\n/g, '\n');
-                    
                     const contentChunk = {
                       id: responseId,
                       object: "chat.completion.chunk",
@@ -305,7 +307,7 @@ async function handleChatRequest(request: Request): Promise<Response> {
                       system_fingerprint: fingerprint,
                       choices: [{
                         index: 0,
-                        delta: { content },
+                        delta: { content: parsed.data },
                         logprobs: null,
                         finish_reason: null
                       }]
