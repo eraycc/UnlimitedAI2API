@@ -1,5 +1,4 @@
 import { serve } from "https://deno.land/std@0.192.0/http/server.ts";
-import { v4 } from "https://deno.land/std@0.192.0/uuid/mod.ts";
 
 // 全局鉴权token环境变量，默认为sk-default
 const AUTH_TOKEN = Deno.env.get("AUTH_TOKEN") || "sk-default";
@@ -84,7 +83,7 @@ async function handleChatRequest(request: Request): Promise<Response> {
 
   // 构造转发请求
   const userAgent = getRandomUserAgent();
-  const requestId = v4.generate();
+  const requestId = crypto.randomUUID();
 
   const payload = {
     messages,
@@ -145,7 +144,7 @@ async function handleChatRequest(request: Request): Promise<Response> {
     }
 
     // 构造OpenAI格式响应
-    const responseId = `chatcmpl-${v4.generate()}`;
+    const responseId = `chatcmpl-${crypto.randomUUID()}`;
     const created = Math.floor(Date.now() / 1000);
 
     if (stream) {
