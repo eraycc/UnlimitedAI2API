@@ -175,7 +175,7 @@ async function handleChatRequest(request: Request): Promise<Response> {
         // 将所有的\\n转换为换行符\n
         content = content.replace(/\\n/g, '\n');
         contentChunks.push(content);
-        console.log("Found content chunk:", JSON.stringify(content)); // 使用JSON.stringify显示实际换行
+        //console.log("Found content chunk:", JSON.stringify(content));
       } else if (line.startsWith('e:') || line.startsWith('d:')) {
         const jsonStr = line.substring(2);
         try {
