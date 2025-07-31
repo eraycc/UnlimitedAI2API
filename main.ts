@@ -119,7 +119,7 @@ async function handleChatRequest(request: Request): Promise<Response> {
     selectedChatModel: "chat-model-reasoning",
   };
 
-  // 添加可选参数
+  // 添加可选参数，实测不支持
   if (temperature !== undefined) payload.temperature = temperature;
   if (max_tokens !== undefined) payload.max_tokens = max_tokens;
 
@@ -166,17 +166,16 @@ async function handleChatRequest(request: Request): Promise<Response> {
         try {
           const data = JSON.parse(jsonStr);
           messageId = data.messageId || "";
+          console.log("Extracted message ID:", messageId);
         } catch (e) {
-          console.error("Failed to parse message ID");
+          console.error("Failed to parse message ID:", e);
         }
       } else if (line.startsWith('0:"')) {
         let content = line.substring(3, line.length - 1);
-        
-        if (line === lines.findLast(l => l.startsWith('0:"')) && content.endsWith('\\n')) {
-          content = content.slice(0, -2);
-        }
-        
+        // 将所有的\\n转换为换行符\n
+        content = content.replace(/\\n/g, '\n');
         contentChunks.push(content);
+        console.log("Found content chunk:", JSON.stringify(content)); // 使用JSON.stringify显示实际换行
       } else if (line.startsWith('e:') || line.startsWith('d:')) {
         const jsonStr = line.substring(2);
         try {
@@ -187,10 +186,11 @@ async function handleChatRequest(request: Request): Promise<Response> {
             completionTokens = data.usage.completionTokens || 0;
           }
         } catch (e) {
-          console.error("Failed to parse finish reason");
+          console.error("Failed to parse finish reason:", e);
         }
       }
     }
+
 
     const fullContent = contentChunks.join("");
 
