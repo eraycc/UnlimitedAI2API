@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.192.0/http/server.ts";
 import { v4 } from "https://deno.land/std@0.192.0/uuid/mod.ts";
 
 // 全局鉴权token环境变量，默认为sk-default
-const AUTH_TOKEN = Deno.env.get("AUTH_TOKEN") || "sk-your-key";
+const AUTH_TOKEN = Deno.env.get("AUTH_TOKEN") || "sk-default";
 
 // 随机正常设备User-Agent列表
 const USER_AGENTS = [
@@ -283,6 +283,4 @@ async function handler(request: Request): Promise<Response> {
   }
 }
 
-// 启动服务器
-console.log("Server running on http://localhost:8000");
-serve(handler, { port: 8000 });
+Deno.serve(handler);
