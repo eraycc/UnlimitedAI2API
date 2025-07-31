@@ -5,7 +5,7 @@ const AUTH_TOKEN = Deno.env.get("AUTH_TOKEN") || "sk-your-key";
 
 // 随机正常设备User-Agent列表
 const USER_AGENTS = [
-  "Mozilla/5.0 (Linux; Android 14; V2118A Build/UP1A.231005.007) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6998.135 Mobile Safari/537.36",
+  "Mozilla/5.0 (Linux; Android 14; A1008P Build/UP1A.231005.007) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6998.135 Mobile Safari/537.36",
   "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
@@ -25,7 +25,6 @@ function getRandomUserAgent(): string {
 // 获取JWT Token
 async function getJwtToken(): Promise<string> {
   const userAgent = getRandomUserAgent();
-  console.log(`Fetching JWT token with User-Agent: ${userAgent}`);
   const response = await fetch("https://app.unlimitedai.chat/api/token", {
     headers: {
       "User-Agent": userAgent,
@@ -34,12 +33,11 @@ async function getJwtToken(): Promise<string> {
   });
 
   if (!response.ok) {
-    console.error(`Failed to get JWT token: ${response.status} ${response.statusText}`);
+    console.error(`Failed to get JWT token: ${response.status}`);
     throw new Error(`Failed to get JWT token: ${response.statusText}`);
   }
 
   const data = await response.json();
-  console.log(`Successfully obtained JWT token`);
   return data.token;
 }
 
@@ -48,7 +46,7 @@ async function handleChatRequest(request: Request): Promise<Response> {
   // 鉴权
   const authHeader = request.headers.get("Authorization");
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    console.error("Unauthorized request - missing or invalid Authorization header");
+    console.error("Unauthorized request");
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
       headers: { "Content-Type": "application/json" },
@@ -57,7 +55,7 @@ async function handleChatRequest(request: Request): Promise<Response> {
 
   const token = authHeader.substring(7);
   if (token !== AUTH_TOKEN) {
-    console.error("Forbidden request - invalid token");
+    console.error("Forbidden request");
     return new Response(JSON.stringify({ error: "Forbidden" }), {
       status: 403,
       headers: { "Content-Type": "application/json" },
@@ -68,26 +66,42 @@ async function handleChatRequest(request: Request): Promise<Response> {
   let requestBody;
   try {
     requestBody = await request.json();
-    console.log("Received request body:", JSON.stringify(requestBody, null, 2));
   } catch (e) {
-    console.error("Invalid request body:", e);
+    console.error("Invalid request body");
     return new Response(JSON.stringify({ error: "Invalid request body" }), {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
   }
 
-  const { messages, stream = false } = requestBody;
-  console.log(`Processing chat request with ${messages.length} messages, stream: ${stream}`);
+  const { messages, stream = false, temperature, max_tokens } = requestBody;
+
+  // 处理消息 - 合并所有用户消息到第一条
+  let processedMessages = messages;
+  if (messages.length > 1) {
+    const firstUserMsgIndex = messages.findIndex(m => m.role === "user");
+    if (firstUserMsgIndex >= 0) {
+      const userMessages = messages
+        .filter(m => m.role === "user")
+        .map(m => m.content);
+      
+      processedMessages = [
+        {
+          role: "user",
+          content: userMessages.join("\n")
+        }
+      ];
+    }
+  }
 
   // 获取JWT Token
   let jwtToken;
   try {
     jwtToken = await getJwtToken();
   } catch (e) {
-    console.error("Failed to get JWT token:", e);
+    console.error("Failed to get JWT token");
     return new Response(
-      JSON.stringify({ error: "Failed to get JWT token", details: e.message }),
+      JSON.stringify({ error: "Failed to get JWT token" }),
       {
         status: 500,
         headers: { "Content-Type": "application/json" },
@@ -99,14 +113,15 @@ async function handleChatRequest(request: Request): Promise<Response> {
   const userAgent = getRandomUserAgent();
   const requestId = generateUUID();
 
-  const payload = {
-    messages,
+  const payload: any = {
+    messages: processedMessages,
     id: requestId,
     selectedChatModel: "chat-model-reasoning",
   };
 
-  console.log("Forwarding request to target API with payload:", JSON.stringify(payload, null, 2));
-  console.log("Using JWT token:", jwtToken);
+  // 添加可选参数
+  if (temperature !== undefined) payload.temperature = temperature;
+  if (max_tokens !== undefined) payload.max_tokens = max_tokens;
 
   try {
     const targetResponse = await fetch("https://app.unlimitedai.chat/api/chat", {
@@ -121,7 +136,7 @@ async function handleChatRequest(request: Request): Promise<Response> {
     });
 
     if (!targetResponse.ok) {
-      console.error(`Target API request failed: ${targetResponse.status} ${targetResponse.statusText}`);
+      console.error(`Target API request failed: ${targetResponse.status}`);
       return new Response(
         JSON.stringify({
           error: "Target API request failed",
@@ -135,7 +150,6 @@ async function handleChatRequest(request: Request): Promise<Response> {
     }
 
     const targetResponseText = await targetResponse.text();
-    console.log("Received target API response:", targetResponseText);
 
     const lines = targetResponseText.trim().split("\n");
 
@@ -152,21 +166,17 @@ async function handleChatRequest(request: Request): Promise<Response> {
         try {
           const data = JSON.parse(jsonStr);
           messageId = data.messageId || "";
-          console.log("Extracted message ID:", messageId);
         } catch (e) {
-          console.error("Failed to parse message ID:", e);
+          console.error("Failed to parse message ID");
         }
       } else if (line.startsWith('0:"')) {
         let content = line.substring(3, line.length - 1);
         
-        // 如果是最后一个内容块且以\n结尾，则移除\n
         if (line === lines.findLast(l => l.startsWith('0:"')) && content.endsWith('\\n')) {
           content = content.slice(0, -2);
-          console.log("Removed trailing \\n from last content chunk");
         }
         
         contentChunks.push(content);
-        console.log("Found content chunk:", content);
       } else if (line.startsWith('e:') || line.startsWith('d:')) {
         const jsonStr = line.substring(2);
         try {
@@ -177,13 +187,12 @@ async function handleChatRequest(request: Request): Promise<Response> {
             completionTokens = data.usage.completionTokens || 0;
           }
         } catch (e) {
-          console.error("Failed to parse finish reason:", e);
+          console.error("Failed to parse finish reason");
         }
       }
     }
 
     const fullContent = contentChunks.join("");
-    console.log("Full message content:", fullContent);
 
     // 构造OpenAI格式响应
     const responseId = `chatcmpl-${generateUUID()}`;
@@ -191,13 +200,10 @@ async function handleChatRequest(request: Request): Promise<Response> {
     const fingerprint = `fp_${Math.random().toString(16).slice(2)}`;
 
     if (stream) {
-      // 流式响应 - 修复版本
-      console.log("Returning stream response with", contentChunks.length, "chunks");
-      
       const stream = new ReadableStream({
         async start(controller) {
           try {
-            // 1. 首先发送角色设置块
+            // 发送角色设置块
             const initialChunk = {
               id: responseId,
               object: "chat.completion.chunk",
@@ -213,7 +219,7 @@ async function handleChatRequest(request: Request): Promise<Response> {
             };
             await sendChunk(controller, initialChunk);
 
-            // 2. 发送所有内容块
+            // 发送内容块
             for (const chunk of contentChunks) {
               const contentChunk = {
                 id: responseId,
@@ -231,7 +237,7 @@ async function handleChatRequest(request: Request): Promise<Response> {
               await sendChunk(controller, contentChunk);
             }
 
-            // 3. 发送结束块
+            // 发送结束块
             const endChunk = {
               id: responseId,
               object: "chat.completion.chunk",
@@ -247,10 +253,9 @@ async function handleChatRequest(request: Request): Promise<Response> {
             };
             await sendChunk(controller, endChunk);
             
-            // 4. 发送结束标记
             controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
           } catch (e) {
-            console.error("Error in stream:", e);
+            console.error("Error in stream");
           } finally {
             controller.close();
           }
@@ -265,8 +270,6 @@ async function handleChatRequest(request: Request): Promise<Response> {
         },
       });
     } else {
-      // 非流式响应
-      console.log("Returning non-stream response");
       const response = {
         id: responseId,
         object: "chat.completion",
@@ -306,9 +309,9 @@ async function handleChatRequest(request: Request): Promise<Response> {
       });
     }
   } catch (e) {
-    console.error("Error processing chat request:", e);
+    console.error("Error processing chat request");
     return new Response(
-      JSON.stringify({ error: "Internal server error", details: e.message }),
+      JSON.stringify({ error: "Internal server error" }),
       {
         status: 500,
         headers: { "Content-Type": "application/json" },
@@ -320,7 +323,7 @@ async function handleChatRequest(request: Request): Promise<Response> {
 // 辅助函数：发送流式块
 async function sendChunk(controller: ReadableStreamDefaultController, chunk: any) {
   controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(chunk)}\n\n`));
-  await new Promise(resolve => setTimeout(resolve, 20)); // 添加小延迟
+  await new Promise(resolve => setTimeout(resolve, 20));
 }
 
 // 处理模型列表请求
@@ -361,26 +364,22 @@ function handleModelsRequest(): Response {
 // 主请求处理器
 async function handler(request: Request): Promise<Response> {
   const url = new URL(request.url);
-  console.log(`Received request: ${request.method} ${url.pathname}`);
 
   try {
     if (url.pathname === "/v1/models") {
-      console.log("Handling models request");
       return handleModelsRequest();
     } else if (url.pathname === "/v1/chat/completions") {
-      console.log("Handling chat completions request");
       return await handleChatRequest(request);
     } else {
-      console.log(`Unknown path requested: ${url.pathname}`);
       return new Response(JSON.stringify({ error: "Not found" }), {
         status: 404,
         headers: { "Content-Type": "application/json" },
       });
     }
   } catch (e) {
-    console.error("Error in handler:", e);
+    console.error("Error in handler");
     return new Response(
-      JSON.stringify({ error: "Internal server error", details: e.message }),
+      JSON.stringify({ error: "Internal server error" }),
       {
         status: 500,
         headers: { "Content-Type": "application/json" },
@@ -391,5 +390,4 @@ async function handler(request: Request): Promise<Response> {
 
 // 启动服务器
 console.log("Server running");
-
 Deno.serve(handler);
