@@ -102,23 +102,14 @@ async function handleChatRequest(request: Request): Promise<Response> {
 
   const { messages, stream = false, temperature, max_tokens } = requestBody;
 
-  // 处理消息 - 合并所有用户消息到第一条
-  let processedMessages = messages;
-  if (messages.length > 1) {
-    const firstUserMsgIndex = messages.findIndex(m => m.role === "user");
-    if (firstUserMsgIndex >= 0) {
-      const userMessages = messages
-        .filter(m => m.role === "user")
-        .map(m => m.content);
-      
-      processedMessages = [
-        {
-          role: "user",
-          content: userMessages.join("\n")
-        }
-      ];
+  // 处理消息 - 合并所有消息到第一条
+  const formattedHistory = messages.map(m => `${m.role}: ${m.content}`).join("\n\n");
+  const processedMessages = messages.length > 0 ? [
+    {
+      role: "user",
+      content: formattedHistory
     }
-  }
+  ] : [];
 
   // 获取JWT Token
   let jwtToken;
