@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.192.0/http/server.ts";
 
-// 全局鉴权token环境变量，默认为sk-default
+// 全局鉴权token环境变量
 const AUTH_TOKEN = Deno.env.get("AUTH_TOKEN") || "sk-your-key";
 
 // 随机正常设备User-Agent列表
