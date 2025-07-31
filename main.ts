@@ -37,6 +37,7 @@ function getRandomUserAgent(): string {
 
 // 获取JWT Token
 async function getJwtToken(): Promise<string> {
+  const userAgent = getRandomUserAgent();
   const response = await fetch("https://app.unlimitedai.chat/api/token", {
     headers: {
       "User-Agent": userAgent,
@@ -81,8 +82,6 @@ function parseStreamLine(line: string): { type: string; data: any } | null {
 
 // 处理聊天请求
 async function handleChatRequest(request: Request): Promise<Response> {
-  // 设置UA
-  const userAgent = getRandomUserAgent();
   // 鉴权
   const authHeader = request.headers.get("Authorization");
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -141,6 +140,7 @@ async function handleChatRequest(request: Request): Promise<Response> {
   }
 
   // 构造转发请求
+  const userAgent = getRandomUserAgent();
   const requestId = generateUUID();
 
   const payload: any = {
@@ -376,6 +376,7 @@ async function handleChatRequest(request: Request): Promise<Response> {
 // 辅助函数：发送流式块
 async function sendChunk(controller: ReadableStreamDefaultController, chunk: any) {
   controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(chunk)}\n\n`));
+  //await new Promise(resolve => setTimeout(resolve, 20));
 }
 
 // 处理模型列表请求
