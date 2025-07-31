@@ -41,6 +41,25 @@ async function getJwtToken(): Promise<string> {
   return data.token;
 }
 
+// 解析流式响应行
+function parseStreamLine(line: string): { type: string; data: any } | null {
+  if (!line) return null;
+  
+  const colonIndex = line.indexOf(':');
+  if (colonIndex === -1) return null;
+  
+  const type = line.substring(0, colonIndex);
+  const content = line.substring(colonIndex + 1);
+  
+  try {
+    const data = content.startsWith('{') ? JSON.parse(content) : content;
+    return { type, data };
+  } catch (e) {
+    console.error("Failed to parse line:", line, e);
+    return null;
+  }
+}
+
 // 处理聊天请求
 async function handleChatRequest(request: Request): Promise<Response> {
   // 鉴权
@@ -149,127 +168,44 @@ async function handleChatRequest(request: Request): Promise<Response> {
       );
     }
 
-    const targetResponseText = await targetResponse.text();
+    if (!stream) {
+      // 非流式响应处理
+      const targetResponseText = await targetResponse.text();
+      const lines = targetResponseText.trim().split("\n");
 
-    const lines = targetResponseText.trim().split("\n");
+      // 解析目标API响应
+      let messageId = "";
+      const contentChunks: string[] = [];
+      let finishReason = "stop";
+      let promptTokens = 0;
+      let completionTokens = 0;
 
-    // 解析目标API响应
-    let messageId = "";
-    const contentChunks: string[] = [];
-    let finishReason = "stop";
-    let promptTokens = 0;
-    let completionTokens = 0;
+      for (const line of lines) {
+        const parsed = parseStreamLine(line);
+        if (!parsed) continue;
 
-    for (const line of lines) {
-      if (line.startsWith('f:')) {
-        const jsonStr = line.substring(2);
-        try {
-          const data = JSON.parse(jsonStr);
-          messageId = data.messageId || "";
-          console.log("Extracted message ID:", messageId);
-        } catch (e) {
-          console.error("Failed to parse message ID:", e);
-        }
-      } else if (line.startsWith('0:"')) {
-        let content = line.substring(3, line.length - 1);
-        // 将所有的\\n转换为换行符\n
-        content = content.replace(/\\n/g, '\n');
-        contentChunks.push(content);
-        //console.log("Found content chunk:", JSON.stringify(content));
-      } else if (line.startsWith('e:') || line.startsWith('d:')) {
-        const jsonStr = line.substring(2);
-        try {
-          const data = JSON.parse(jsonStr);
-          if (data.finishReason) finishReason = data.finishReason;
-          if (data.usage) {
-            promptTokens = data.usage.promptTokens || 0;
-            completionTokens = data.usage.completionTokens || 0;
+        if (parsed.type === 'f') {
+          messageId = parsed.data.messageId || "";
+        } else if (parsed.type === '0') {
+          let content = parsed.data;
+          content = content.replace(/\\n/g, '\n');
+          contentChunks.push(content);
+        } else if (parsed.type === 'e' || parsed.type === 'd') {
+          if (parsed.data.finishReason) finishReason = parsed.data.finishReason;
+          if (parsed.data.usage) {
+            promptTokens = parsed.data.usage.promptTokens || 0;
+            completionTokens = parsed.data.usage.completionTokens || 0;
           }
-        } catch (e) {
-          console.error("Failed to parse finish reason:", e);
         }
       }
-    }
 
+      const fullContent = contentChunks.join("");
 
-    const fullContent = contentChunks.join("");
+      // 构造OpenAI格式响应
+      const responseId = `chatcmpl-${generateUUID()}`;
+      const created = Math.floor(Date.now() / 1000);
+      const fingerprint = `fp_${Math.random().toString(16).slice(2)}`;
 
-    // 构造OpenAI格式响应
-    const responseId = `chatcmpl-${generateUUID()}`;
-    const created = Math.floor(Date.now() / 1000);
-    const fingerprint = `fp_${Math.random().toString(16).slice(2)}`;
-
-    if (stream) {
-      const stream = new ReadableStream({
-        async start(controller) {
-          try {
-            // 发送角色设置块
-            const initialChunk = {
-              id: responseId,
-              object: "chat.completion.chunk",
-              created,
-              model: "UnlimitedAI",
-              system_fingerprint: fingerprint,
-              choices: [{
-                index: 0,
-                delta: { role: "assistant" },
-                logprobs: null,
-                finish_reason: null
-              }]
-            };
-            await sendChunk(controller, initialChunk);
-
-            // 发送内容块
-            for (const chunk of contentChunks) {
-              const contentChunk = {
-                id: responseId,
-                object: "chat.completion.chunk",
-                created,
-                model: "UnlimitedAI",
-                system_fingerprint: fingerprint,
-                choices: [{
-                  index: 0,
-                  delta: { content: chunk },
-                  logprobs: null,
-                  finish_reason: null
-                }]
-              };
-              await sendChunk(controller, contentChunk);
-            }
-
-            // 发送结束块
-            const endChunk = {
-              id: responseId,
-              object: "chat.completion.chunk",
-              created,
-              model: "UnlimitedAI",
-              system_fingerprint: fingerprint,
-              choices: [{
-                index: 0,
-                delta: {},
-                logprobs: null,
-                finish_reason: finishReason
-              }]
-            };
-            await sendChunk(controller, endChunk);
-            
-            controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
-          } catch (e) {
-            console.error("Error in stream");
-          } finally {
-            controller.close();
-          }
-        },
-      });
-
-      return new Response(stream, {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-        },
-      });
-    } else {
       const response = {
         id: responseId,
         object: "chat.completion",
@@ -307,9 +243,120 @@ async function handleChatRequest(request: Request): Promise<Response> {
       return new Response(JSON.stringify(response), {
         headers: { "Content-Type": "application/json" },
       });
+    } else {
+      // 流式响应处理
+      const responseId = `chatcmpl-${generateUUID()}`;
+      const created = Math.floor(Date.now() / 1000);
+      const fingerprint = `fp_${Math.random().toString(16).slice(2)}`;
+      
+      let messageId = "";
+      let finishReason = "stop";
+      let promptTokens = 0;
+      let completionTokens = 0;
+
+      const stream = new ReadableStream({
+        async start(controller) {
+          try {
+            // 发送初始角色设置块
+            const initialChunk = {
+              id: responseId,
+              object: "chat.completion.chunk",
+              created,
+              model: "UnlimitedAI",
+              system_fingerprint: fingerprint,
+              choices: [{
+                index: 0,
+                delta: { role: "assistant" },
+                logprobs: null,
+                finish_reason: null
+              }]
+            };
+            await sendChunk(controller, initialChunk);
+
+            // 处理流式响应
+            if (targetResponse.body) {
+              const reader = targetResponse.body.getReader();
+              const decoder = new TextDecoder();
+              let buffer = "";
+              
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split("\n");
+                buffer = lines.pop() || ""; // 保存未完成的行
+
+                for (const line of lines) {
+                  const parsed = parseStreamLine(line.trim());
+                  if (!parsed) continue;
+
+                  if (parsed.type === 'f') {
+                    messageId = parsed.data.messageId || "";
+                  } else if (parsed.type === '0') {
+                    let content = parsed.data;
+                    content = content.replace(/\\n/g, '\n');
+                    
+                    const contentChunk = {
+                      id: responseId,
+                      object: "chat.completion.chunk",
+                      created,
+                      model: "UnlimitedAI",
+                      system_fingerprint: fingerprint,
+                      choices: [{
+                        index: 0,
+                        delta: { content },
+                        logprobs: null,
+                        finish_reason: null
+                      }]
+                    };
+                    await sendChunk(controller, contentChunk);
+                  } else if (parsed.type === 'e' || parsed.type === 'd') {
+                    if (parsed.data.finishReason) finishReason = parsed.data.finishReason;
+                    if (parsed.data.usage) {
+                      promptTokens = parsed.data.usage.promptTokens || 0;
+                      completionTokens = parsed.data.usage.completionTokens || 0;
+                    }
+                  }
+                }
+              }
+
+              // 发送结束块
+              const endChunk = {
+                id: responseId,
+                object: "chat.completion.chunk",
+                created,
+                model: "UnlimitedAI",
+                system_fingerprint: fingerprint,
+                choices: [{
+                  index: 0,
+                  delta: {},
+                  logprobs: null,
+                  finish_reason: finishReason
+                }]
+              };
+              await sendChunk(controller, endChunk);
+            }
+            
+            controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+          } catch (e) {
+            console.error("Error in stream:", e);
+          } finally {
+            controller.close();
+          }
+        },
+      });
+
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        },
+      });
     }
   } catch (e) {
-    console.error("Error processing chat request");
+    console.error("Error processing chat request:", e);
     return new Response(
       JSON.stringify({ error: "Internal server error" }),
       {
@@ -377,7 +424,7 @@ async function handler(request: Request): Promise<Response> {
       });
     }
   } catch (e) {
-    console.error("Error in handler");
+    console.error("Error in handler:", e);
     return new Response(
       JSON.stringify({ error: "Internal server error" }),
       {
